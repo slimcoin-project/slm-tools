@@ -3,12 +3,12 @@
 # MIT License
 
 from random import random as rand_num
-import math, argparse
+import math, argparse, datetime
 
 #constants for block types
 #do we need to compute also POS blocks? (their difficulty could be ignored probably)
 #TODO: Reward calculation
-#TODO: Has participation an effect on difficulty? (I think: only if it changes rapidly.)
+#TODO: Effect of participation on short-term profitability - should only be relevant if changes sharply.
 
 
 POW = 0
@@ -17,6 +17,7 @@ POW_PROBABILITY = 0.8
 POB_TARGET = 3 # ???
 BURN_DECAY_RATE = 1.00000198 # original Slimcoin value.
 POWPOB_BLOCKS_PER_DAY = 96
+GENESIS_BLOCK_DATE = datetime.date(2014, 5, 28) # day of SLM inception
 
 # default range for burn values
 DEFAULT_POB_RANGE = 10000
@@ -72,6 +73,8 @@ class CBlock:
         print("-" * 30)
 
 
+## tool functions for CBlock class
+
 def PoW_blocks_back(): # modified to take "blocks" value (should not be global).
     # calculates how many blocks back from now were PoW.
     blocks = CBlock.blocks
@@ -122,10 +125,41 @@ def calc_PoB_difficulty(cur_blk_coins_burned):
 
     return new_diff
 
+## small new functions
+
 def reset_blocks():
     CBlock.blocks = []
     CBlock.ebc = 0
     CBlock.total_coins_burned = 0
+
+def get_days_since_inception():
+    today = datetime.date.today()
+    timedelta = today - GENESIS_BLOCK_DATE
+    return timedelta.days
+
+def print_intro(p):
+    print("Calculating probabilities for the following scenario:")
+    print("- Burnt amount:", p.burnt_amount)
+    print("- nEffectiveBurnCoins:", p.neffectiveburncoins)
+    if p.days_before:
+        print("- Days before burn transaction:", p.days_before)
+    if p.days_after:
+        print("- Days generated after burn transaction:", p.days_after)
+    if p.blocks_before:
+        print("- Blocks generated before burn transaction:", p.blocks_before)
+    if p.blocks_after:
+        print("- Blocks generated after burn transaction:", p.blocks_after)
+    if p.average_burn_rate:
+        print("- Average burn rate: %f coins per PoB/PoW block." % p. average_burn_rate)
+    if p.burn_event:
+        print("- Another burn event of %f coins" % p.burn_event)
+    if p.burn_event_blocks:
+        print("  at %f blocks in the future" % p.burn_event_blocks)
+        
+        
+ 
+
+## main loops
 
 
 def gen_fake_blocks(nBlocks, avg_coins_burned=0, pob_range=None, randomize=False, verbose=False, reset=False):
@@ -161,8 +195,6 @@ def gen_fake_blocks(nBlocks, avg_coins_burned=0, pob_range=None, randomize=False
     if verbose:
         for block in blocks:
             block.print_self()
-
-
 
 
 def create_block_sequence(blocksbefore=0, ebc=0, blocksafter=0, ownburn=0, otherburn=0, otherburnblock=None, avg_coins_burned=0, randomize=True, reset=True, verbose=False, pob_range=None):
@@ -208,32 +240,39 @@ def calc_probabilities(ownburn_blockheight, ownburn, participation, verbose=Fals
 
     # loop from "now" on, past blocks are not needed in this loop.
     expected_probabilities = []
+    pow_blocks_after_burn = 0
 
     for block in CBlock.blocks[ownburn_blockheight:]:
 
-        effective_ebc = block.ebc * participation
-        decay_blocks = block.blockheight - ownburn_blockheight
-        own_ebc = ownburn / (BURN_DECAY_RATE ** decay_blocks)
-        probability = own_ebc / effective_ebc
-        expected_probabilities.append(probability)
+        if block.type == POB: # you don't get PoB rewards for PoW blocks.
+
+            effective_ebc = block.ebc * participation
+            decay_blocks = pow_blocks_after_burn
+            own_ebc = ownburn / (BURN_DECAY_RATE ** decay_blocks)
+            probability = own_ebc / effective_ebc
+            expected_probabilities.append(probability)
+
+        elif block.type == POW:
+            pow_blocks_after_burn += 1 #only pow blocks lead to decay.
 
         if verbose:
             block.print_self()
-            print("Own Effective Burnt Coins: %f" % own_ebc)
-            print("Real Effective Burnt Coins with participation %f: %f" % (participation, effective_ebc))
-            print("Block find probability: %f" % probability)
+            if block.type == POB:
+                print("Own Effective Burnt Coins: %f" % own_ebc)
+                print("Real Effective Burnt Coins with participation %f: %f" % (participation, effective_ebc))
+                print("Block find probability: %f" % probability)
 
     if printresult:
         print("=" * 30)
         initial_ebc = CBlock.blocks[ownburn_blockheight].ebc
         probsum = sum(expected_probabilities)
-        blocksafter = decay_blocks # should give the correct number after the loop
+        pobblocks = len(expected_probabilities) # should give the correct number after the loop
         print("Result for %f burnt coins at %f nEffectiveBurnCoins and %f mint participation" % (ownburn, initial_ebc, participation))
-        print("Expected found blocks (from %i)\n(sum of all probabilities): %f" % (blocksafter, probsum))
+        print("Expected found blocks (from %i PoB blocks)\n(sum of all probabilities): %f" % (pobblocks, probsum))
 
     return expected_probabilities
 
-def get_probability(blocksbefore=0, ebc=0, blocksafter=0, daysbefore=None, daysafter=None, ownburn=0, otherburn=0, otherburnblock=None, avg_coins_burned=None, randomize=True, reset=True, verbose=False, pob_range=None, participation=0.2):
+def get_probability(blocksbefore=0, ebc=0, blocksafter=0, daysbefore=None, daysafter=None, ownburn=0, otherburn=0, otherburnblock=None, avg_coins_burned=None, randomize=True, reset=True, verbose=False, pob_range=None, participation=0.2, printresult=True):
 
     if daysbefore:
         blocksbefore = POWPOB_BLOCKS_PER_DAY * daysbefore
@@ -242,14 +281,17 @@ def get_probability(blocksbefore=0, ebc=0, blocksafter=0, daysbefore=None, daysa
 
     create_block_sequence(blocksbefore, ebc, blocksafter, ownburn, otherburn, otherburnblock, avg_coins_burned, randomize, reset=True, verbose=False, pob_range=pob_range)
 
-    return calc_probabilities(ownburn_blockheight=blocksbefore + 1, ownburn=ownburn, participation=participation, verbose=verbose)
+    return calc_probabilities(ownburn_blockheight=blocksbefore + 1, ownburn=ownburn, participation=participation, verbose=verbose, printresult=printresult)
 
 def cli():
+    helptext_daysbefore = 'Generate blocks for X days before the burn transaction. Default is since the time of the coin inception (%s)' % GENESIS_BLOCK_DATE.strftime("%d-%m-%Y")
+    days_since_inception = get_days_since_inception()
+
     parser = argparse.ArgumentParser(description="Profitability calculator.")
     parser.add_argument('burnt_amount', help='Amount of the burn transaction.', type=float)
     parser.add_argument('neffectiveburncoins', help='Effective burn coins at the moment of the burn.', type=float)
-    parser.add_argument('-db', '--days-before', help='Generate blocks for X days before the burn transaction.', type=int)
-    parser.add_argument('-da', '--days-after', help='Generate blocks for X days after burn transaction.', type=int)
+    parser.add_argument('-da', '--days-after', help='Generate blocks for X days after burn transaction. Default is one year (365 days).', type=int, default=365)
+    parser.add_argument('-db', '--days-before', help=helptext_daysbefore, type=int, default=days_since_inception)
     
     # advanced arguments
     parser.add_argument('-bb', '--blocks-before', help='Generate X PoW/PoB blocks before the burn transaction. (Warning: PoS blocks are ignored.)', type=int)
@@ -261,6 +303,7 @@ def cli():
     parser.add_argument('-r', '--randomize', help='Add some randomness to the average burn transactions.', type=bool)
     parser.add_argument('-g', '--range', help='Range for the randomness, in coins.', type=float)
     parser.add_argument('-v', '--verbose', help='Verbose mode. Will show all blocks with data.', action='store_true')
+    parser.add_argument('-s', '--silent', help='Silent mode. Will only return probabilities (to use in scripts).', action='store_true')
 
 
     return parser.parse_args()
@@ -272,5 +315,13 @@ if __name__ == "__main__":
 
     p = cli()
 
-    get_probability(blocksbefore=p.blocks_before, ebc=p.neffectiveburncoins, blocksafter=p.blocks_after, daysbefore=p.days_before, daysafter=p.days_after, ownburn=p.burnt_amount, otherburn=p.burn_event, otherburnblock=p.burn_event_blocks, avg_coins_burned=p.average_burn_rate, randomize=p.randomize, verbose=p.verbose, pob_range=p.range, participation=p.participation)
+    if p.silent == False:
+        printresult = True
+        print_intro(p)
+    else:
+        printresult = False
+        
+      
+
+    get_probability(blocksbefore=p.blocks_before, ebc=p.neffectiveburncoins, blocksafter=p.blocks_after, daysbefore=p.days_before, daysafter=p.days_after, ownburn=p.burnt_amount, otherburn=p.burn_event, otherburnblock=p.burn_event_blocks, avg_coins_burned=p.average_burn_rate, randomize=p.randomize, verbose=p.verbose, pob_range=p.range, participation=p.participation, printresult=printresult)
 
